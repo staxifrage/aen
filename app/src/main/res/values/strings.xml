@@ -1,0 +1,18 @@
+<resources>
+    <string name="app_name">OpenMotion Editor</string>
+    <string name="timeline">Timeline</string>
+    <string name="preview">Preview</string>
+    <string name="properties">Properties</string>
+    <string name="transform">Move &amp; Transform</string>
+    <string name="color_and_fill">Color &amp; Fill</string>
+    <string name="effects">Effects</string>
+    <string name="blending_and_opacity">Blending &amp; Opacity</string>
+    <string name="play">Play</string>
+    <string name="pause">Pause</string>
+    <string name="add_keyframe">Add Keyframe</string>
+    <string name="remove_keyframe">Remove Keyframe</string>
+    <string name="split_layer">Split</string>
+    <string name="delete_layer">Delete</string>
+    <string name="add_layer">Add Layer</string>
+    <string name="export">Export</string>
+</resources>

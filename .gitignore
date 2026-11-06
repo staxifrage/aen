@@ -1,0 +1,21 @@
+# Gradle caches and build directories
+.gradle/
+build/
+app/build/
+
+# Local configuration
+local.properties
+
+# Android Studio / IntelliJ IDEA files
+.idea/
+*.iml
+
+# Log files
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Private research data
+basis/

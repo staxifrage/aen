@@ -1,0 +1,47 @@
+name: Android CI Build
+
+on:
+  push:
+    branches: ["main", "master", "develop"]
+  pull_request:
+    branches: ["main", "master"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      # Downloads/uses the Gradle version from:
+      # gradle/wrapper/gradle-wrapper.properties
+      # and caches Gradle dependencies/distribution artifacts.
+      - name: Setup Gradle from wrapper properties
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: wrapper
+          cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
+
+      # No gradlew / gradle-wrapper.jar needed in CI.
+      - name: Build Debug APK with Gradle
+        run: gradle assembleDebug --stacktrace
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 7

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Professional Editor Dark Palette (inspired by Alight Motion's UX) -->
+    <color name="bg_workspace">#121316</color>
+    <color name="bg_viewport">#1B1D22</color>
+    <color name="bg_panel">#22252C</color>
+    <color name="bg_panel_elevated">#2D313A</color>
+    <color name="bg_timeline_track">#1E2026</color>
+    <color name="accent_primary">#00E5FF</color>
+    <color name="accent_keyframe">#FFD54F</color>
+    <color name="accent_playhead">#FF3366</color>
+    <color name="text_primary">#F0F2F5</color>
+    <color name="text_secondary">#8C93A3</color>
+    <color name="border_subtle">#333742</color>
+</resources>
