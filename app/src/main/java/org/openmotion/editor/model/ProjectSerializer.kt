@@ -7,7 +7,8 @@ import java.io.File
 
 /**
  * Dependency-free JSON project serialization (uses Android's built-in org.json).
- * Projects are stored under filesDir/projects/*.json so they survive app restarts.
+ * Projects are stored as JSON files under the filesDir/projects directory
+ * so they survive app restarts.
  */
 object ProjectSerializer {
 
@@ -191,9 +192,6 @@ object ProjectSerializer {
         intensity = (o.optDouble("intensity", 0.5)).toFloat(),
         param1 = (o.optDouble("param1")).toFloat(),
         param2 = (o.optDouble("param2")).toFloat(),
-        param3 = o.optInt("param3", 0x00FF00)
-    )
-}
         param3 = o.optInt("param3", 0x00FF00)
     )
 }
