@@ -5,6 +5,7 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaMuxer
+import android.net.Uri
 import android.opengl.EGLExt
 import android.opengl.EGLSurface
 import android.opengl.GLES30
@@ -12,17 +13,22 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
 import android.util.Log
+import org.openmotion.editor.engine.decoder.TrackMediaDecoder
 import org.openmotion.editor.engine.gl.EglCore
+import org.openmotion.editor.engine.gl.ImageTextureHelper
 import org.openmotion.editor.engine.gl.LayerRenderer
 import org.openmotion.editor.engine.gl.TextTextureRenderer
+import org.openmotion.editor.model.EffectType
 import org.openmotion.editor.model.LayerType
 import org.openmotion.editor.model.Project
 import org.openmotion.editor.utils.MatrixUtils
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Offscreen hardware-accelerated video export pipeline.
  * Encodes the multi-layer project timeline to an MP4 video file using MediaCodec and MediaMuxer.
+ * Renders every layer type (video decoders run in the same offscreen GL context).
  */
 class ExportEngine(
     private val context: Context,
@@ -50,7 +56,6 @@ class ExportEngine(
     ) {
         exportThread = HandlerThread("VideoExportThread").apply { start() }
         exportHandler = Handler(exportThread!!.looper)
-
         exportHandler?.post {
             try {
                 performExport(outputFile, onProgress)
@@ -75,14 +80,12 @@ class ExportEngine(
         val height = project.height
         val fps = project.frameRate
         val bitrate = (width * height * 4.0).toInt().coerceIn(4_000_000, 25_000_000)
-
         val format = MediaFormat.createVideoFormat(MIME_TYPE, width, height).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, I_FRAME_INTERVAL)
         }
-
         val encoder = MediaCodec.createEncoderByType(MIME_TYPE)
         encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         val inputSurface = encoder.createInputSurface()
@@ -98,6 +101,8 @@ class ExportEngine(
 
         val renderer = LayerRenderer().apply { init() }
         val textRenderer = TextTextureRenderer()
+        val imageHelper = ImageTextureHelper(context)
+        val decoders = ConcurrentHashMap<String, TrackMediaDecoder>()
 
         val bufferInfo = MediaCodec.BufferInfo()
         val totalFrames = ((project.durationMs / 1000.0) * fps).toInt().coerceAtLeast(1)
@@ -107,18 +112,27 @@ class ExportEngine(
         try {
             for (frameIndex in 0 until totalFrames) {
                 if (isCancelled) break
-
                 val currentTimeMs = frameIndex * frameDurationMs
                 val frameTimeNs = frameIndex * (1_000_000_000L / fps)
 
-                // 1. Render multi-layer frame onto encoder input surface
                 GLES30.glViewport(0, 0, width, height)
                 GLES30.glClearColor(0.07f, 0.075f, 0.086f, 1.0f)
                 GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
 
                 val activeLayers = project.getActiveLayersAt(currentTimeMs)
                 for (layer in activeLayers) {
-                    val evaluatedTransform = layer.transform.evaluateAt(currentTimeMs)
+                    var evaluatedTransform = layer.transform.evaluateAt(currentTimeMs)
+                    // SHAKE effect (CPU-side, works for every layer type)
+                    layer.effects.forEach { e ->
+                        if (e.enabled && e.type == EffectType.SHAKE) {
+                            val amp = e.intensity * e.param1
+                            val seed = currentTimeMs * 0.091f + layer.id.hashCode().toFloat() * 0.001f
+                            evaluatedTransform = evaluatedTransform.copy(
+                                posX = evaluatedTransform.posX + kotlin.math.sin(seed) * amp,
+                                posY = evaluatedTransform.posY + kotlin.math.cos(seed * 1.7f) * amp
+                            )
+                        }
+                    }
                     when (layer.type) {
                         LayerType.SHAPE -> {
                             val r = ((layer.colorGrading.tintColorRgb shr 16) and 0xFF) / 255.0f
@@ -146,16 +160,63 @@ class ExportEngine(
                                 blendMode = layer.blendMode,
                                 projMatrix = projMatrix,
                                 layerWidth = info.width,
-                                layerHeight = info.height
+                                layerHeight = info.height,
+                                effects = layer.effects
                             )
                         }
-                        else -> {
-                            // Other layers
+                        LayerType.IMAGE -> {
+                            val uriStr = layer.mediaSourceUri
+                            if (uriStr != null) {
+                                val info = imageHelper.getOrCreateImageTexture(uriStr)
+                                if (info != null) {
+                                    val identity = FloatArray(16)
+                                    android.opengl.Matrix.setIdentityM(identity, 0)
+                                    renderer.render2DTextureLayer(
+                                        textureId = info.textureId,
+                                        texMatrix = identity,
+                                        transform = evaluatedTransform,
+                                        grading = layer.colorGrading,
+                                        blendMode = layer.blendMode,
+                                        projMatrix = projMatrix,
+                                        layerWidth = info.width,
+                                        layerHeight = info.height,
+                                        effects = layer.effects
+                                    )
+                                }
+                            }
+                        }
+                        LayerType.VIDEO -> {
+                            val uriStr = layer.mediaSourceUri
+                            if (uriStr != null) {
+                                val decoder = decoders.getOrPut(layer.id) {
+                                    TrackMediaDecoder(context, Uri.parse(uriStr), layer.id).apply { init() }
+                                }
+                                val layerTimeUs = (currentTimeMs - layer.startTimeMs + layer.mediaOffsetMs) * 1000L
+                                decoder.advanceTo(layerTimeUs)
+                                decoder.frameQueueManager?.let { queue ->
+                                    queue.updateIfAvailable()
+                                    val w = if (decoder.videoWidth > 0) decoder.videoWidth.toFloat() else 400f
+                                    val h = if (decoder.videoHeight > 0) decoder.videoHeight.toFloat() else 400f
+                                    renderer.renderOesLayer(
+                                        textureId = queue.textureId,
+                                        texMatrix = queue.texMatrix,
+                                        transform = evaluatedTransform,
+                                        grading = layer.colorGrading,
+                                        blendMode = layer.blendMode,
+                                        projMatrix = projMatrix,
+                                        layerWidth = w,
+                                        layerHeight = h,
+                                        effects = layer.effects
+                                    )
+                                }
+                            }
+                        }
+                        LayerType.AUDIO -> {
+                            // Audio muxing is not yet implemented in the export pass.
                         }
                     }
                 }
 
-                // Set presentation time on Android EGL
                 EGLExt.eglPresentationTimeANDROID(
                     android.opengl.EGL14.eglGetCurrentDisplay(),
                     eglSurface,
@@ -163,7 +224,6 @@ class ExportEngine(
                 )
                 eglCore.swapBuffers(eglSurface)
 
-                // Drain encoder output
                 var encoderOutputAvailable = true
                 while (encoderOutputAvailable) {
                     val outputBufferIndex = encoder.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
@@ -183,30 +243,23 @@ class ExportEngine(
                         outputBufferIndex >= 0 -> {
                             val encodedData = encoder.getOutputBuffer(outputBufferIndex)
                                 ?: throw RuntimeException("Encoder buffer was null")
-
                             if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
                                 bufferInfo.size = 0
                             }
-
                             if (bufferInfo.size != 0 && muxerStarted) {
                                 encodedData.position(bufferInfo.offset)
                                 encodedData.limit(bufferInfo.offset + bufferInfo.size)
                                 muxer.writeSampleData(trackIndex, encodedData, bufferInfo)
                             }
-
                             encoder.releaseOutputBuffer(outputBufferIndex, false)
                         }
                     }
                 }
-
                 val progress = (frameIndex + 1).toFloat() / totalFrames.toFloat()
                 mainHandler.post { onProgress(progress) }
             }
 
-            // Signal End of Stream
             encoder.signalEndOfInputStream()
-
-            // Drain remaining frames
             var draining = true
             while (draining) {
                 val outputBufferIndex = encoder.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
@@ -227,15 +280,15 @@ class ExportEngine(
             }
         } finally {
             try {
+                decoders.values.forEach { it.release() }
+                imageHelper.release()
                 renderer.release()
                 textRenderer.release()
                 eglCore.releaseSurface(eglSurface)
                 eglCore.release()
-
                 encoder.stop()
                 encoder.release()
                 inputSurface.release()
-
                 if (muxerStarted) {
                     muxer.stop()
                 }

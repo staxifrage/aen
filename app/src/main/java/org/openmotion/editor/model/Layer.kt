@@ -38,8 +38,19 @@ data class Layer(
     val transform: Transform = Transform(),
     val colorGrading: ColorGrading = ColorGrading(),
     var shapeType: String = "RECTANGLE",
-    var textContent: String = ""
+    var textContent: String = "",
+    val effects: MutableList<Effect> = mutableListOf()
 ) {
+    /**
+     * Deep copy: transform, colorGrading, effects and keyframe lists are all
+     * mutable, so the data-class copy() (shallow) would share state between the
+     * original and the copy — fatal for undo/redo and split-layer.
+     */
+    fun deepCopy(): Layer = copy(
+        transform = transform.deepCopy(),
+        colorGrading = colorGrading.copy(),
+        effects = effects.map { it.copy() }.toMutableList()
+    )
     /**
      * Checks if this layer is active at the specified project playback position.
      */

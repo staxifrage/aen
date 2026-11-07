@@ -13,9 +13,8 @@ concurrency:
 
 jobs:
   build:
-    name: Build Debug APK
+    name: Build, Lint & Test
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -26,22 +25,27 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
-      # Downloads/uses the Gradle version from:
-      # gradle/wrapper/gradle-wrapper.properties
-      # and caches Gradle dependencies/distribution artifacts.
+      # Installs the Gradle version pinned in gradle/wrapper/gradle-wrapper.properties
+      # and caches dependencies/distribution artifacts.
       - name: Setup Gradle from wrapper properties
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: wrapper
           cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
 
-      # No gradlew / gradle-wrapper.jar needed in CI.
-      - name: Build Debug APK with Gradle
-        run: gradle assembleDebug --stacktrace
+      - name: Lint (non-blocking)
+        run: gradle lintDebug --stacktrace
+        continue-on-error: true
 
-      - name: Upload Debug APK Artifact
+      - name: Run Unit Tests
+        run: gradle testDebugUnitTest --stacktrace
+
+      - name: Build Debug & Release APKs
+        run: gradle assembleDebug assembleRelease --stacktrace
+
+      - name: Upload APK Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug
-          path: app/build/outputs/apk/debug/*.apk
-          retention-days: 7
+          name: openmotion-apks
+          path: app/build/outputs/apk/**/*.apk
+          retention-days: 14

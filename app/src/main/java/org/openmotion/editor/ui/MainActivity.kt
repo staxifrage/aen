@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -64,6 +65,14 @@ import org.openmotion.editor.ui.theme.TextPrimary
 import org.openmotion.editor.ui.theme.TextSecondary
 import org.openmotion.editor.ui.timeline.TimelineView
 import java.io.File
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.filled.AddPhotoAlternate
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Save
+import org.openmotion.editor.model.ProjectSerializer
 
 class MainActivity : ComponentActivity() {
 
@@ -150,7 +159,7 @@ fun EditorScreen(
     val redoStack = remember { mutableStateListOf<List<Layer>>() }
 
     fun pushUndoState() {
-        undoStack.add(project.layers.map { it.copy() })
+        undoStack.add(project.layers.map { it.deepCopy() })
         redoStack.clear()
     }
 
@@ -158,6 +167,30 @@ fun EditorScreen(
     var isExporting by remember { mutableStateOf(false) }
     var exportProgress by remember { mutableFloatStateOf(0f) }
     var exportEngineRef by remember { mutableStateOf<ExportEngine?>(null) }
+    var showLoadDialog by remember { mutableStateOf(false) }
+    val savedProjects = remember(showLoadDialog) { if (showLoadDialog) ProjectSerializer.listSaved(context) else emptyList() }
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (_: SecurityException) { /* temporary grant is enough for this session */ }
+            val mime = context.contentResolver.getType(uri)
+            val type = if (mime?.startsWith("video/") == true) LayerType.VIDEO else LayerType.IMAGE
+            pushUndoState()
+            val newLayer = Layer(
+                name = if (type == LayerType.VIDEO) "Video Clip" else "Image",
+                type = type,
+                mediaSourceUri = uri.toString(),
+                startTimeMs = currentPlayheadMs,
+                endTimeMs = (currentPlayheadMs + 5000L).coerceAtMost(project.durationMs),
+                zIndex = project.layers.size
+            )
+            project.layers.add(newLayer)
+            layerList.add(newLayer)
+            selectedLayer = newLayer
+            engine.seekTo(currentPlayheadMs)
+        }
+    }
 
     DisposableEffect(engine) {
         engine.onPlayheadUpdated = { time ->
@@ -187,7 +220,7 @@ fun EditorScreen(
                     IconButton(
                         onClick = {
                             if (undoStack.isNotEmpty()) {
-                                redoStack.add(project.layers.map { it.copy() })
+                                redoStack.add(project.layers.map { it.deepCopy() })
                                 val prevLayers = undoStack.removeAt(undoStack.lastIndex)
                                 project.layers.clear()
                                 project.layers.addAll(prevLayers)
@@ -209,7 +242,7 @@ fun EditorScreen(
                     IconButton(
                         onClick = {
                             if (redoStack.isNotEmpty()) {
-                                undoStack.add(project.layers.map { it.copy() })
+                                undoStack.add(project.layers.map { it.deepCopy() })
                                 val nextLayers = redoStack.removeAt(redoStack.lastIndex)
                                 project.layers.clear()
                                 project.layers.addAll(nextLayers)
@@ -228,6 +261,18 @@ fun EditorScreen(
                         )
                     }
 
+                    IconButton(onClick = { importLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) }) {
+                        Icon(Icons.Default.AddPhotoAlternate, contentDescription = "Import media", tint = TextPrimary)
+                    }
+                    IconButton(onClick = {
+                        val saved = ProjectSerializer.save(context, project)
+                        Toast.makeText(context, "Saved: ${saved.name}", Toast.LENGTH_SHORT).show()
+                    }) {
+                        Icon(Icons.Default.Save, contentDescription = "Save project", tint = TextPrimary)
+                    }
+                    IconButton(onClick = { showLoadDialog = true }) {
+                        Icon(Icons.Default.Folder, contentDescription = "Load project", tint = TextPrimary)
+                    }
                     IconButton(onClick = { /* Project Settings dialog */ }) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings", tint = TextPrimary)
                     }
@@ -319,7 +364,7 @@ fun EditorScreen(
                     selectedLayer?.let { layer ->
                         if (currentPlayheadMs in (layer.startTimeMs + 100)..(layer.endTimeMs - 100)) {
                             pushUndoState()
-                            val newLayer = layer.copy(
+                            val newLayer = layer.deepCopy().copy(
                                 id = java.util.UUID.randomUUID().toString(),
                                 name = "${layer.name} (Split)",
                                 startTimeMs = currentPlayheadMs,
@@ -400,6 +445,43 @@ fun EditorScreen(
                             style = MaterialTheme.typography.bodyMedium,
                             color = TextSecondary
                         )
+                    }
+                },
+                containerColor = BgPanel
+            )
+        }
+        if (showLoadDialog) {
+            AlertDialog(
+                onDismissRequest = { showLoadDialog = false },
+                confirmButton = {
+                    TextButton(onClick = { showLoadDialog = false }) { Text("Close", color = TextPrimary) }
+                },
+                title = { Text("Load Project", color = TextPrimary) },
+                text = {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        if (savedProjects.isEmpty()) {
+                            Text("No saved projects yet.", color = TextSecondary)
+                        } else {
+                            savedProjects.take(8).forEach { file ->
+                                Text(
+                                    file.nameWithoutExtension,
+                                    color = AccentPrimary,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 6.dp)
+                                        .clickable {
+                                            ProjectSerializer.load(context, file, project)
+                                            layerList.clear()
+                                            layerList.addAll(project.layers)
+                                            selectedLayer = project.layers.firstOrNull()
+                                            currentPlayheadMs = 0L
+                                            engine.seekTo(0L)
+                                            showLoadDialog = false
+                                            Toast.makeText(context, "Loaded: ${file.name}", Toast.LENGTH_SHORT).show()
+                                        }
+                                )
+                            }
+                        }
                     }
                 },
                 containerColor = BgPanel

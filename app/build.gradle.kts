@@ -27,6 +27,10 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            // CI-friendly: sign release builds with the debug key so assembleRelease
+            // produces an installable APK without a managed keystore. Replace with your
+            // own signingConfig for Play Store distribution.
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

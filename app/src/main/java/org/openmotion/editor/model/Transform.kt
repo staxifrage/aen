@@ -37,6 +37,15 @@ data class Transform(
         )
     }
 
+    /** Deep copy including every keyframe track (keyframes themselves are immutable). */
+    fun deepCopy(): Transform = copy(
+        posXKeyframes = posXKeyframes.map { it.copy() }.toMutableList(),
+        posYKeyframes = posYKeyframes.map { it.copy() }.toMutableList(),
+        scaleKeyframes = scaleKeyframes.map { it.copy() }.toMutableList(),
+        rotationKeyframes = rotationKeyframes.map { it.copy() }.toMutableList(),
+        opacityKeyframes = opacityKeyframes.map { it.copy() }.toMutableList()
+    )
+
     private fun interpolateChannel(keyframes: List<Keyframe>, defaultValue: Float, timeMs: Long): Float {
         if (keyframes.isEmpty()) return defaultValue
         if (keyframes.size == 1) return keyframes[0].value
