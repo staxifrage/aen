@@ -194,3 +194,6 @@ object ProjectSerializer {
         param3 = o.optInt("param3", 0x00FF00)
     )
 }
+        param3 = o.optInt("param3", 0x00FF00)
+    )
+}
